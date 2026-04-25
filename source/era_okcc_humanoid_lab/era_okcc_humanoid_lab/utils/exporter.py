@@ -26,8 +26,64 @@ def export_motion_policy_as_onnx(
 ):
     if not os.path.exists(path):
         os.makedirs(path, exist_ok=True)
-    policy_exporter = _OnnxMotionPolicyExporter(env, actor_critic, normalizer, verbose)
+    if hasattr(actor_critic, "as_onnx"):
+        policy_exporter = _OnnxMotionMLPPolicyExporter(env, actor_critic, verbose)
+    else:
+        policy_exporter = _OnnxMotionPolicyExporter(env, actor_critic, normalizer, verbose)
     policy_exporter.export(path, filename)
+
+
+class _OnnxMotionMLPPolicyExporter(torch.nn.Module):
+    def __init__(self, env: ManagerBasedRLEnv, policy, verbose=False):
+        super().__init__()
+        self.verbose = verbose
+        self.policy = policy.as_onnx(verbose)
+        cmd: MotionCommand = env.command_manager.get_term("motion")
+
+        self.joint_pos = cmd.motion.joint_pos.to("cpu")
+        self.joint_vel = cmd.motion.joint_vel.to("cpu")
+        self.body_pos_w = cmd.motion.body_pos_w.to("cpu")
+        self.body_quat_w = cmd.motion.body_quat_w.to("cpu")
+        self.body_lin_vel_w = cmd.motion.body_lin_vel_w.to("cpu")
+        self.body_ang_vel_w = cmd.motion.body_ang_vel_w.to("cpu")
+        self.time_step_total = self.joint_pos.shape[0]
+
+    def forward(self, x, time_step):
+        time_step_clamped = torch.clamp(time_step.long().squeeze(-1), max=self.time_step_total - 1)
+        return (
+            self.policy(x),
+            self.joint_pos[time_step_clamped],
+            self.joint_vel[time_step_clamped],
+            self.body_pos_w[time_step_clamped],
+            self.body_quat_w[time_step_clamped],
+            self.body_lin_vel_w[time_step_clamped],
+            self.body_ang_vel_w[time_step_clamped],
+        )
+
+    def export(self, path, filename):
+        self.to("cpu")
+        self.eval()
+        obs = torch.zeros(1, self.policy.input_size)
+        time_step = torch.zeros(1, 1)
+        torch.onnx.export(
+            self,
+            (obs, time_step),
+            os.path.join(path, filename),
+            export_params=True,
+            opset_version=18,
+            verbose=self.verbose,
+            input_names=["obs", "time_step"],
+            output_names=[
+                "actions",
+                "joint_pos",
+                "joint_vel",
+                "body_pos_w",
+                "body_quat_w",
+                "body_lin_vel_w",
+                "body_ang_vel_w",
+            ],
+            dynamic_axes={},
+        )
 
 
 class _OnnxMotionPolicyExporter(_OnnxPolicyExporter):
@@ -132,8 +188,40 @@ def export_locomotion_policy_as_onnx(
 ):
     if not os.path.exists(path):
         os.makedirs(path, exist_ok=True)
-    policy_exporter = _OnnxLocomotionPolicyExporter(env, actor_critic, normalizer, verbose)
+    if hasattr(actor_critic, "as_onnx"):
+        policy_exporter = _OnnxLocomotionMLPPolicyExporter(actor_critic, verbose)
+    else:
+        policy_exporter = _OnnxLocomotionPolicyExporter(env, actor_critic, normalizer, verbose)
     policy_exporter.export(path, filename)
+
+
+class _OnnxLocomotionMLPPolicyExporter(torch.nn.Module):
+    def __init__(self, policy, verbose=False):
+        super().__init__()
+        self.verbose = verbose
+        self.policy = policy.as_onnx(verbose)
+
+    def forward(self, x, time_step):
+        return (self.policy(x),)
+
+    def export(self, path, filename):
+        self.to("cpu")
+        self.eval()
+        obs = torch.zeros(1, self.policy.input_size)
+        time_step = torch.zeros(1, 1)
+        torch.onnx.export(
+            self,
+            (obs, time_step),
+            os.path.join(path, filename),
+            export_params=True,
+            opset_version=18,
+            verbose=self.verbose,
+            input_names=["obs", "time_step"],
+            output_names=[
+                "actions",
+            ],
+            dynamic_axes={},
+        )
 
 
 class _OnnxLocomotionPolicyExporter(_OnnxPolicyExporter):

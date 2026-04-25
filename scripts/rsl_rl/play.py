@@ -200,13 +200,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 
     # extract the neural network module
-    # we do this in a try-except to maintain backwards compatibility.
-    try:
-        # version 2.3 onwards
+    # Recent RSL-RL versions expose the actor through get_policy(), while older
+    # versions used policy/actor_critic containers.
+    if hasattr(runner.alg, "get_policy"):
+        policy_nn = runner.alg.get_policy()
+    elif hasattr(runner.alg, "policy"):
         policy_nn = runner.alg.policy
-    except AttributeError:
-        # version 2.2 and below
+    elif hasattr(runner.alg, "actor_critic"):
         policy_nn = runner.alg.actor_critic
+    else:
+        raise AttributeError("Unable to locate a policy module on the RSL-RL algorithm.")
 
     # extract the normalizer
     if hasattr(policy_nn, "actor_obs_normalizer"):
