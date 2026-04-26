@@ -26,6 +26,7 @@ parser.add_argument("--seed", type=int, default=None, help="Seed used for the en
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
 # Added: support local motion file and make registry optional
 parser.add_argument("--motion_file", type=str, default=None, help="Path to local motion npz (overrides registry).")
+parser.add_argument("--motion_files", type=str, default=None, help="Path to a text file listing local motion npz files.")
 parser.add_argument(
     "--registry_name", type=str, default=None, help="The name of the wand registry (if not using --motion_file)."
 )
@@ -118,6 +119,54 @@ torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
 
 
+def _read_motion_files(motion_files_path: str) -> list[str]:
+    motion_files_path = os.path.abspath(motion_files_path)
+    motion_files_dir = os.path.dirname(motion_files_path)
+    motion_files = []
+    with open(motion_files_path) as f:
+        for line in f:
+            motion_file = line.strip()
+            if len(motion_file) == 0 or motion_file.startswith("#"):
+                continue
+            if not os.path.isabs(motion_file):
+                motion_file = os.path.join(motion_files_dir, motion_file)
+            motion_files.append(os.path.abspath(motion_file))
+    if len(motion_files) == 0:
+        raise ValueError(f"No motion files found in {motion_files_path}")
+    return motion_files
+
+
+def _configure_tracking_motion(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg) -> str:
+    print(f"[INFO] Task '{args_cli.task}' requires a motion file. Checking motion arguments.")
+    if args_cli.motion_files is not None:
+        registry_name = "none"
+        env_cfg.commands.motion.motion_files = _read_motion_files(args_cli.motion_files)
+        env_cfg.commands.motion.motion_file = env_cfg.commands.motion.motion_files[0]
+        print(f"[INFO]: Using {len(env_cfg.commands.motion.motion_files)} motion files from: {args_cli.motion_files}")
+        return registry_name
+    if args_cli.motion_file is not None:
+        registry_name = "none"
+        env_cfg.commands.motion.motion_file = os.path.abspath(args_cli.motion_file)
+        env_cfg.commands.motion.motion_files = None
+        return registry_name
+    if args_cli.registry_name is None:
+        raise ValueError("Please provide either --motion_file, --motion_files, or --registry_name")
+
+    registry_name = args_cli.registry_name
+    if ":" not in registry_name:  # Check if the registry name includes alias, if not, append ":latest"
+        registry_name += ":latest"
+
+    import pathlib
+
+    import wandb
+
+    api = wandb.Api()
+    artifact = api.artifact(registry_name)
+    env_cfg.commands.motion.motion_file = str(pathlib.Path(artifact.download()) / "motion.npz")
+    env_cfg.commands.motion.motion_files = None
+    return registry_name
+
+
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
     """Train with RSL-RL agent."""
@@ -133,29 +182,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.seed = agent_cfg.seed
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
 
-    # For tasks that start with "Tracking", require a local motion file to be provided.
-    # load the motion file from motion file path or from the wandb registry
+    # Load the motion file from local path, motion file list, or the wandb registry.
     if args_cli.task.startswith("Tracking"):
-        print(f"[INFO] Task '{args_cli.task}' requires a motion file. Checking for --motion_file argument.")
-        if args_cli.motion_file is not None:
-            # use the local npz directly
-            registry_name = "none"
-            env_cfg.commands.motion.motion_file = os.path.abspath(args_cli.motion_file)
-        else:
-            if args_cli.registry_name is None:
-                raise ValueError("Please provide either --motion_file or --registry_name")
-
-            registry_name = args_cli.registry_name
-            if ":" not in registry_name:  # Check if the registry name includes alias, if not, append ":latest"
-                registry_name += ":latest"
-
-            import pathlib
-
-            import wandb
-
-            api = wandb.Api()
-            artifact = api.artifact(registry_name)
-            env_cfg.commands.motion.motion_file = str(pathlib.Path(artifact.download()) / "motion.npz")
+        registry_name = _configure_tracking_motion(env_cfg)
     else:
         registry_name = args_cli.registry_name
 
@@ -199,32 +228,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # set the log directory for the environment (works for all environment types)
     env_cfg.log_dir = log_dir
-
-    # For tasks that start with "Tracking", require a local motion file to be provided.
-    # load the motion file from motion file path or from the wandb registry
-    if args_cli.task.startswith("Tracking"):
-        print(f"[INFO] Task '{args_cli.task}' requires a motion file. Checking for --motion_file argument.")
-        if args_cli.motion_file is not None:
-            # use the local npz directly
-            registry_name = "none"
-            env_cfg.commands.motion.motion_file = os.path.abspath(args_cli.motion_file)
-        else:
-            if args_cli.registry_name is None:
-                raise ValueError("Please provide either --motion_file or --registry_name")
-
-            registry_name = args_cli.registry_name
-            if ":" not in registry_name:  # Check if the registry name includes alias, if not, append ":latest"
-                registry_name += ":latest"
-
-            import pathlib
-
-            import wandb
-
-            api = wandb.Api()
-            artifact = api.artifact(registry_name)
-            env_cfg.commands.motion.motion_file = str(pathlib.Path(artifact.download()) / "motion.npz")
-    else:
-        registry_name = args_cli.registry_name
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)

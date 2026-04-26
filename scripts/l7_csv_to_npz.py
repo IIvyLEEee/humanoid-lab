@@ -354,6 +354,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, joi
                     print(f"[INFO]: Motion saved to wandb registry: {REGISTRY}/{COLLECTION}")
                 except Exception as e:
                     print(f"[WARN]: Skipping registry link: {e}")
+            break
 
 
 def main():

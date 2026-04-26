@@ -12,7 +12,7 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
 class TrackingPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
     max_iterations = 50000
-    save_interval = 500
+    save_interval = 100
     experiment_name = "mimic"
     empirical_normalization = True
     obs_groups = {"actor": ["policy"], "critic": ["critic"]}
